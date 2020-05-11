@@ -1,6 +1,6 @@
 # K_Medoid_Clustering
 
-In this project I revisited clustering, one of my favourite analytic methods, to explore and analyse a real-world dataset that included a __mix of categorical and numerical__ feature. This required a different approach from the classical __K-means__ algorithm that cannot be no directly applied to categorical data. 
+In this project I revisit __clustering__, one of my favourite analytic methods, to explore and analyse a real-world dataset that included a __mix of categorical and numerical__ feature. This required a different approach from the classical __K-means__ algorithm that cannot be no directly applied to categorical data. 
 
 Instead, I used the __K-medoids__ algorithm, also known as __PAM__ (Partitioning Around Medoids), that has the advantage of working on __distances other than numerical__ and lends itself well to analyse mixed-type data. 
 
