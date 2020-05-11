@@ -1,0 +1,462 @@
+---
+title: "Segmenting with Mixed Type Data"
+subtitle: "Initial data inspection and manupulation"
+author: "Diego Usai"
+date: "11 April 2020"
+output:
+  html_document:
+    theme: spacelab
+    df_print: paged
+    highlight: pygments
+    number_sections: false
+    toc: true
+    toc_float: true
+    toc_depth : 4
+    font-family: Roboto
+    code_folding: none
+    keep_md: false
+    dpi: 300
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  eval       = TRUE,   # TRUE to evaluate every single chunck
+  warning    = FALSE,  # FALSE to suppress warnings from being shown
+  message    = FALSE,  # FALSE to avoid package loading messages
+  cache      = FALSE,  # TRUE to save every single chunck to a folder
+  echo       = TRUE,   # TRUE to display code in output document
+  out.width  = "80%",
+  out.height = "80%",
+  fig.align  = "center"
+)
+```
+
+```{r switch off locale, include=FALSE}
+# turn off locale-specific sorting to get output messages in English
+Sys.setlocale("LC_TIME", "C")
+```
+
+```{r libraries}
+library(tidyverse)
+library(readxl) 
+library(skimr)
+library(knitr)
+library(janitor)
+```
+
+
+With the new year, I started to look for new employment opportunities and even managed to land a handful of final stage interviews before it all grounded to a halt following the coronavirus pandemic. Invariably, as part of the selection process I was asked to analyse a set of data and compile a number of data driven-recommendations to present in my final meeting. 
+
+In this post I retrace the steps I took for one of the take home analysis I was tasked with and revisit `clustering`, one of my favourite analytic methods. Only this time the set up is a lot closer to a real-world situation in that the data I had to analyse came with a __mix of categorical and numerical__ feature. Simply put, this __could not be tackled__ with a bog-standard __K-means__ algorithm as it's based on _pairwise Euclidean distances_ and has no direct application to categorical data. 
+
+
+## The data
+
+The data represents all __online acquisitions__ in February 2018 and their subcripion status 3 mohnths later (9th June 2018) for a __Fictional News Aggregator Subscription__ business. It contains a number of parameters describing each account, like __account creation date__, __campaign attributed to acquisition__, __payment method__ and __length of product trial__. A full description of the variables can be found in the __Appendix__.
+
+I got hold of this dataset in the course of a recruitment selection process as I was asked to carry out an analysis and present results and recommendations that could __helps improve their product take up__ in my final meeting. 
+
+Although fictitius in nature, I thought it best to __further anonimise the dataset__ by changing names and values of most of the variables as well as removing several features that were of no use to the analysis. You can find the dataset on [__my GitHub profile__](https://github.com/DiegoUsaiUK/K_Medoid_Clustering), along with the scripts I used to carry out the analysis.
+
+In this project I'm also testing quite a few of the `adorn_` and the `tabyl` functions from the `janitor` library, a family of functions created to help expedite the initial data exploration and cleaning but also very useful to create and format summary tables. 
+
+
+## Data loading, inspection and manupulation
+
+As this is raw data, it needed some cleansing and rearranging. Let's start with loading up the data and make some adjustments to the variable names.
+
+```{r raw data}
+data_raw <-
+   readxl::read_xlsx(
+      path = "../00_data/Subscription Data.xlsx",
+      sheet = 'Data',
+      trim_ws = TRUE,
+      col_names = TRUE,
+      guess_max = 2000
+   ) %>% 
+   # all headers to lower case
+   set_names(names(.) %>% str_to_lower) %>% 
+   # shortening some names
+   rename_at(vars(contains("cancellation")),
+             funs(str_replace_all(., "cancellation", "canc"))) %>% 
+   # swapping space with underscore in some names
+   rename_at(vars(contains(" ")),
+             funs(str_replace_all(., "[ ]", "_")))
+
+```
+
+
+A first glance at the data structure and it all looks in good order: all variables are in the format I would expect them to be.
+```{r}
+data_raw %>% glimpse()
+```
+
+
+```{r}
+data_raw %>% skim()
+```
+
+
+## Individual variables exploration
+
+### account_id duplicates
+
+There are 29 (58/2) duplicate account_id 
+
+```{r}
+data_raw %>% 
+   # selecting custoomer IDs that appear more than once
+   group_by(account_id) %>% 
+   count() %>% 
+   filter(n > 1) %>% 
+   ungroup() %>% 
+   janitor::adorn_totals()
+```
+
+It looks like the large majority of duplicate customer ID are linked to an Amendment on their account. 
+
+```{r}
+data_raw %>% 
+   group_by(account_id) %>% 
+   count() %>% 
+   filter(n > 1) %>% 
+   ungroup() %>% 
+   # appending all data back in
+   left_join(data_raw) %>% 
+   # select some columns for a closer look
+   select(account_id, canc_reason) %>% 
+   arrange(canc_reason)
+```
+
+Given the very small number of duplicates compared to the total, I'm simply removing the duplicates.
+
+```{r}
+data_clean <- 
+   data_raw %>% 
+   group_by(account_id) %>% 
+   count() %>% 
+   filter(n == 1) %>% 
+   ungroup() %>% 
+   # appending all data back in
+   left_join(data_raw) %>% 
+   select(-n)
+```
+
+
+### country
+
+Overwhelming majority of subscriptions are UK based
+
+```{r}
+data_raw %>% 
+   group_by(country) %>% 
+   count() %>% 
+   ungroup() %>% 
+   arrange(desc(n)) %>% 
+   ungroup() %>% 
+   mutate(country = country %>% as_factor()) %>% 
+   filter(n > 7) %>%
+   
+   ggplot(aes(x = country, y = n)) +
+   geom_col(fill = "#E69F00", colour = "red") +
+   theme_minimal() +
+   labs(title     = 'Number of subscriptions by acquisition country',
+         caption  = '',
+         x        = 'Country of Residence',
+         y        = 'Number of Subscribers') +
+   theme(plot.title = element_text(hjust = 0.5),
+         axis.text.x = element_text(angle = 45, hjust = 1, size = 8))
+```
+
+
+
+### status
+
+Majority of accounts are either `Active` or `Cancelled`
+
+```{r}
+data_raw %>% 
+   group_by(status) %>% 
+   count() %>% 
+   ungroup()
+```
+
+I'm rolling `Lapsed` and `Pending Cancellation` into `Cancelled`
+
+```{r}
+data_clean <- 
+   data_clean %>%
+   mutate(status = 
+             case_when(status == 'Lapsed' ~ 'Cancelled',
+                       status == 'Pending Cancellation' ~ 'Cancelled',
+                       TRUE ~ status)
+   )
+```
+
+
+### Product group
+
+All looks OK here
+
+```{r}
+# no NAs
+data_raw %>% 
+   group_by(product_group) %>% 
+   count() %>% 
+   ungroup() %>% 
+   janitor::adorn_totals()
+```
+
+### Payment Frequency
+
+Under payment frequency there are only a handful of `Fixed Term` 
+
+```{r}
+# no NAs
+data_raw %>% 
+   group_by(payment_frequency) %>% 
+   count() %>% 
+   ungroup() %>% 
+   janitor::adorn_totals()
+```
+
+I'm dropping `Fixed Term`
+```{r}
+data_clean <- 
+   data_clean %>% 
+   filter(payment_frequency != 'Fixed Term') 
+```
+
+
+### Campaign
+
+
+Top three campaigns account for over 72% of total acquisitions in February 2018
+
+```{r}
+# no NAs
+data_raw %>% 
+   group_by(campaign_code) %>% 
+   count() %>% 
+   ungroup() %>% 
+   arrange(desc(n)) %>% 
+   ungroup() %>% 
+   mutate(campaign_code = campaign_code %>% as_factor()) %>% 
+   filter(n > 3) %>% 
+   
+   ggplot(aes(x = campaign_code, y = n)) +
+   geom_col(fill = "steelblue", colour = "blue") +
+   theme_minimal() +
+   labs(title     = 'Number of subscriptions by acquisition campaign',
+         caption  = '',
+         x        = 'Campaign Code',
+         y        = 'Number of Subscribers') +
+   theme(plot.title = element_text(hjust = 0.5),
+         axis.text.x = element_text(angle = 45, hjust = 1, size = 8))
+```
+
+Dropping `unknown` campaign code
+```{r}
+data_clean <- 
+   data_clean %>% 
+   filter(campaign_code != 'Unknown') 
+```
+
+### Trial end date
+
+`trial_monthly_price` price should be zero for all
+```{r, eval=F}
+data_raw %>% 
+   select(contains('trial'), monthly_price) %>% 
+   # filter(!(trial_end_date)) %>% 
+   arrange(desc(trial_length)) %>% 
+   head()
+```
+
+Amending `trial_monthly_price` to zero and the 6.94 `monthly_price` to 6.99
+
+```{r}
+data_clean <- 
+   data_clean %>% 
+   mutate(trial_monthly_price = 
+             case_when(trial_monthly_price == 6.94 ~ 0,
+                       TRUE ~ trial_monthly_price),
+          monthly_price = 
+             case_when(monthly_price == 6.94 ~ 6.99,
+                       TRUE ~ monthly_price)
+          )
+```
+
+
+### Cancellation date / reason
+
+there's too much noise in the `cancellation reasons`, which needs simplifying to get a clear read  
+```{r}
+data_raw %>% 
+   group_by(status, canc_reason) %>% 
+   count() %>% 
+   ungroup() %>% 
+   arrange(status, n) %>% 
+   janitor::adorn_totals()
+```
+
+Grouping up some of the reason for cancelling and dealing with the NAs
+```{r}
+data_clean <- 
+   data_clean %>% 
+      mutate(
+         canc_reason = 
+          case_when(
+            status == 'Active' & canc_reason == 'Unknown' ~ '-',
+            
+            # setting all NAs to zero as they're easier to deal with
+            is.na(canc_reason)  ~ '-',
+            
+            canc_reason == 'App performance' | 
+            canc_reason == 'No compatible devices' |
+            canc_reason == 'Look and feel'   | 
+            canc_reason == 'Functionality' |
+            canc_reason == 'Download'                      ~ 'UX Related',
+            
+            canc_reason == 'Failed Credit Card Payment' | 
+            canc_reason == 'Failed PayPal Payment' |
+            canc_reason == 'Failed Direct Debit Payment'   ~ 'Failed Payment',
+            
+            canc_reason == 'Political' |
+            canc_reason == 'Editorial' |
+            canc_reason == 'Lack of content'               ~ 'Editorial',
+            
+            canc_reason == 'Competitor' |
+            canc_reason == 'Apple news'                    ~ 'Competitor',
+            
+            canc_reason == 'Product switch' |
+            canc_reason == 'Amendment' |                  
+            canc_reason == 'Duplicate subscription'        ~ 'Other',
+            
+            canc_reason == 'Not known' | 
+            canc_reason == 'Unknown'                       ~ '-',
+            
+            TRUE                                           ~ canc_reason)
+      )  
+```
+
+
+### trial length
+
+Majority of subscriptions go for 1M (one month) trial. I've triangulated dates with trial length and they all check out. NAs represent subscribers already enrolled so no trial for them 
+
+```{r}
+data_raw %>% 
+   group_by(trial_length) %>% 
+   count() %>% 
+   ungroup() %>% 
+   janitor::adorn_totals()
+```
+
+
+### price
+
+```{r}
+data_clean %>% 
+   filter(country == 'United Kingdom') %>% 
+   group_by( 
+      monthly_price,
+      contract_monthly_price
+      ) %>% 
+   count() %>% 
+   ungroup() %>% 
+   arrange(desc(n)) %>% 
+   janitor::adorn_totals()
+```
+
+
+Where  `monthly_price` is zero they've all cancelled. I believe it coincides with old customers who cancelled on Feb-18
+```{r}
+data_clean %>%
+   filter(trial_length == '1M') %>% # 4233 are 1M subscriptions or 90% of total
+   group_by( 
+            product_group,
+            trial_monthly_price, # all zero
+            monthly_price, 
+            contract_monthly_price) %>% 
+   count() %>% 
+   ungroup() %>% 
+   janitor::adorn_totals()
+```
+
+
+### payment method
+
+A handful of `Unknown` are to be found in `payment_method`
+
+```{r}
+data_raw %>% 
+   group_by(payment_method) %>% 
+   count() %>% 
+   ungroup()
+```
+
+Dropping `unknown`
+```{r}
+data_clean <- 
+   data_clean %>% 
+   filter(payment_method != 'Unknown') 
+```
+
+A final look at the cleansed data: I'm happy with everything here!
+
+```{r}
+data_clean %>% 
+   skim()
+```
+
+
+## Saving data_clean
+
+```{r, eval=F}
+# Saving clensed data for analysis phase
+saveRDS(data_clean, "../00_data/data_clean.rds")
+```
+
+
+
+### Code Repository
+
+The full R code and all relevant files can be found on my GitHub profile @ [__K Medoid Clustering__](https://github.com/DiegoUsaiUK/K_Medoid_Clustering) 
+
+
+
+### References
+
+
+* For the article that inspired my foray into K-medois clustering see this excellent TDS post by _Thomas Filaire_: [__Clustering on mixed type data__](https://towardsdatascience.com/clustering-on-mixed-type-data-8bbd0a2569c3)
+
+* For a tidy and fully-featured approach to counting things, see the [__tabyls Function Vignette__](https://cran.r-project.org/web/packages/janitor/vignettes/tabyls.html)
+
+
+
+
+### Appendix
+
+__Table 1 – Variable Definitions__
+
+Attribute          | Description 
+:----------------|:--------------------------------------------------------
+Account ID | Unique account ID
+Created Date | Date of original account creation
+Country | Country of account holder
+Status | Current status - active/inactive
+Product Group | Product type
+Payment Frequency | Most subscriptions are a 1 year contract term - payable annually or monthly
+Campaign Code | Unique identifier for campaign attributed to acquisition
+Start Date | Start date of the trial
+End Date | Scheduled end of term
+Cancellation Date | Date of instruction to cancel
+Cancellation Reason | Reason given for cancellation
+Monthly Price | Current monthly price of subscription
+Contract Monthly Price | Price after promo period
+Trial Length | Length of trial
+Trial Monthly Price | Price during trial
+Payment Method | Payment method
+
+
