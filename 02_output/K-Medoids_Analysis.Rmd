@@ -1,0 +1,566 @@
+---
+title: "Segmenting with Mixed Type Data"
+subtitle: "A Case Study Using K-Medoids on Subscription Data"
+author: "Diego Usai"
+date: "22 April 2020"
+output:
+  html_document:
+    theme: spacelab
+    df_print: paged
+    highlight: pygments
+    number_sections: false
+    toc: true
+    toc_float: true
+    toc_depth : 4
+    font-family: Roboto
+    code_folding: none
+    keep_md: false
+    dpi: 300
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  eval       = TRUE,   # TRUE to evaluate every single chunck
+  warning    = FALSE,  # FALSE to suppress warnings from being shown
+  message    = FALSE,  # FALSE to avoid package loading messages
+  cache      = TRUE,   # TRUE to save every single chunck to a folder
+  echo       = TRUE,   # TRUE to display code in output document
+  out.width  = "80%",
+  out.height = "80%",
+  fig.align  = "center"
+)
+```
+
+```{r switch off locale, include=FALSE}
+# turn off locale-specific sorting to get output messages in English
+Sys.setlocale("LC_TIME", "C")
+```
+
+```{r libraries}
+library(tidyverse)
+library(readxl)
+library(skimr)
+library(knitr) 
+library(janitor)
+library(cluster)
+library(Rtsne)
+```
+
+
+With the new year, I started to look for new employment opportunities and even managed to land a handful of final stage interviews before it all grounded to a halt following the corona-virus pandemic. Invariably, as part of the selection process I was asked to analyse a set of data and compile a number of data driven-recommendations to present in my final meeting. 
+
+In this post I retrace the steps I took for one of the take home analysis I was tasked with and revisit `clustering`, one of my favourite analytic methods. Only this time the set up is a lot closer to a real-world situation in that the data I had to analyse came with a __mix of categorical and numerical__ feature. Simply put, this __could not be tackled__ with a bog-standard __K-means__ algorithm as it's based on _pairwise Euclidean distances_ and has no direct application to categorical data. 
+
+
+## The data
+
+The data represents all __online acquisitions__ in February 2018 and their subscription status 3 months later (9th June 2018) for a __Fictional News Aggregator Subscription__ business. It contains a number of parameters describing each account, like __account creation date__, __campaign attributed to acquisition__, __payment method__ and __length of product trial__. A full description of the variables can be found in the __Appendix__
+
+I got hold of this dataset in the course of a recruitment selection process as I was asked to carry out an analysis and present results and recommendations that could __helps improve their product sign up__ in my final meeting. Although fictitious in nature, I thought it best to __further anonimise the dataset__ by changing names and values of most of the variables as well as removing several features that were of no use to the analysis
+
+The data was raw and required some cleansing and manipulation before it could be used for analysis. You can find the anonimised dataset on [__my GitHub profile__](https://github.com/DiegoUsaiUK/K_Medoid_Clustering), along with the scripts I used to cleanse the data and perform the analysis
+
+### Data Exploration 
+
+This is a vital part of any data analysis study, often overlooked in favour of the fancier and "sexier" modelling/playing with the algos. In fact, I find it one of the __most creative phases__ of any project, where you __"join the dots"__ among the different variables and start __formulating interesting hypothesis__ for you to test later on
+
+```{r}
+data_clean <- readRDS("../00_data/data_clean.rds")
+```
+
+Here I'm loading the cleaned data before I explore a selection of the features, run through a number of considerations to set up the analysis as well as show you some of the interesting insight I gathered. You can find the post covering data cleansing and formatting on my webpage @ [__diegousai.io__](https://diegousai.io) 
+
+In this project I'm also testing quite a few of the `adorn_` and the `tabyl` functions from the `janitor` library, a family of functions created to help expedite the initial data exploration and cleaning but also very useful to create and format summary tables. 
+
+
+#### Country of Residence
+
+Let's start with the geographic distribution of subscribers, the overwhelming majority of whom are UK based
+
+```{r, echo=F}
+data_clean %>% 
+   group_by(country) %>% 
+   count() %>% 
+   ungroup() %>% 
+   arrange(desc(n)) %>% 
+   mutate(country = country %>% as_factor()) %>% 
+   filter(n > 7) %>%
+   
+   ggplot(aes(x = country, y = n)) +
+   geom_col(fill = "#E69F00", colour = "red") +
+   theme_minimal() +
+   labs(title     = 'Number of subscriptions by acquisition country',
+         caption  = '',
+         x        = 'Country of Residence',
+         y        = 'Number of Subscribers') +
+   theme(plot.title = element_text(hjust = 0.5),
+         axis.text.x = element_text(angle = 45, hjust = 1, size = 8))
+```
+
+
+#### Cancellations 
+
+The dynamics of `cancellations` are definitely something that __warrants further investigation__ (outside the scope of this study). In fact, `Failed payments` represent roughly __10%__ of total subscriptions and a staggering __38%__ when looking at cancellations alone
+```{r}
+data_clean %>% 
+   tabyl(canc_reason, status) %>%
+   adorn_totals(c("row", "col")) %>% 
+   adorn_percentages("col") %>%
+   adorn_pct_formatting(rounding = "half up", digits = 1) %>% 
+   adorn_ns() %>%
+   adorn_title("combined") %>%
+   kable(align = 'c')
+```
+
+
+#### Payment Methods
+
+Credit Card is the preferred payment method for over two fifths (61%) of subscribers
+
+```{r}
+data_clean %>% 
+   tabyl(payment_method) %>%
+   adorn_pct_formatting(rounding = "half up", digits = 1) %>% 
+   arrange(desc(n)) %>%  
+   kable(align = 'c')
+```
+
+
+
+#### Campaigns
+
+Three acquisition campaigns drove the largest majority of subscriptions in February 2018
+```{r, echo=F}
+data_clean %>% 
+   group_by(campaign_code) %>% 
+   count() %>% 
+   ungroup() %>% 
+   arrange(desc(n)) %>% 
+   mutate(campaign_code = campaign_code %>% as_factor()) %>% 
+   filter(n > 3) %>% 
+   
+   ggplot(aes(x = campaign_code, y = n)) +
+   geom_col(fill = "steelblue", colour = "blue") +
+   theme_minimal() +
+   labs(title     = 'Number of subscriptions by acquisition campaign',
+         caption  = '',
+         x        = 'Campaign Code',
+         y        = 'Number of Subscribers') +
+   theme(plot.title = element_text(hjust = 0.5),
+         axis.text.x = element_text(angle = 45, hjust = 1, size = 8))
+```
+
+The analysis is going to focus on these __top 3 campaigns__, which account for over 73% of total acquisitions. Adding additional campaigns to the analysis would likely see them all lumped into one “hybrid” cluster and result in less focused insight.
+```{r}
+data_clean %>% 
+   tabyl(campaign_code) %>%
+   adorn_pct_formatting(rounding = "half up", digits = 1) %>% 
+   arrange(desc(n)) %>% 
+   top_n(10, wt = n) %>% 
+   kable(align = 'c')
+```
+
+
+#### Trial Length
+
+Potential subscribes have a number of options available but the analysis is going to take into account __only customers that took the 1-month trial__ before sign-up. 
+
+Given that all acquisitions refer to a particular month and their current status __3 MONTHS LATER__, this will ensure a clear cut window for the analysis AND cover the vast majority of subscriptions (nearly 90%)  
+
+```{r}
+data_clean %>% 
+   tabyl(trial_length) %>%
+   adorn_pct_formatting(rounding = "half up", digits = 1) %>% 
+   select(-valid_percent) %>% 
+   kable(align = 'c')
+```
+
+
+#### Product Pricing
+
+Zooming in on the top 3 campaigns for clarity, we can see the two price points of __£6.99__  for the __Standard__ product and __£15__ for the __Premium__ one. 
+
+Surprisingly, campaign `56472` is attributed to the acquisition of both products. It is good practice to __keep acquisition campaigns more closely aligned to a single product__ as it would ensure better accountability and understanding of acquisition dynamics.
+
+```{r}
+data_clean %>% 
+   filter(campaign_code %in% c('57572', '56472', '56972')) %>% 
+   filter(trial_length == '1M') %>% 
+   group_by(product_group, campaign_code,
+            contract_monthly_price) %>% 
+   count() %>% 
+   ungroup() %>%
+   arrange(campaign_code) %>% 
+   kable(align = 'c')
+```
+
+
+#### Subscription Rate
+
+For the majority of the top 10 campaigns, __sign up after trial__ hovers in the __74-76% range__. This offers a good benchmark for the general subscription levels we can expect after trial. 
+```{r}
+data_clean %>% 
+   # selecting top n campaigns by number of 
+   filter(campaign_code %in% c(
+      '57572', '56472', '56972', '51372', '57272',
+      '51472', '47672', '53872', '52972', '54072'
+                               )) %>% 
+   filter(trial_length == '1M') %>%
+   group_by(campaign_code, status) %>% 
+   count() %>% 
+   ungroup() %>% 
+   # lag to allign past (lagging) obs to present obs
+   mutate(lag_1 = lag(n, n = 1)) %>% 
+   # sort out NAs
+   tidyr::fill(lag_1, .direction = "up") %>% 
+   # calculate cancelled to total rate perc difference
+   mutate(act_to_tot = 
+            (lag_1 / (n + lag_1)))  %>% 
+   filter(status == 'Cancelled') %>%
+   select(campaign_code, act_to_tot) %>% 
+   arrange(desc(campaign_code)) %>% 
+   adorn_pct_formatting(rounding = "half up", digits = 1) %>% 
+   kable(align = 'c')
+```
+
+The low subscription rate for campaign `51472` may be due to the higher __contract price__ after trial (`contract_monthly_price`) of __£9.65__ compared to __£6.99__ seen for other Standard product contracts.
+   
+```{r}
+data_clean %>% 
+   filter(campaign_code == '51472') %>% 
+   filter(trial_length == '1M') %>% 
+   group_by(contract_monthly_price, product_group, campaign_code) %>% 
+   count() %>% 
+   ungroup() %>% 
+   kable(align = 'c')
+```
+
+
+
+## Analysis Structure
+
+In this analysis I want to understand what factors __make a customer subscribe after a trial__ and to do so, I need to identify __what approach__ is best suited for the type and cut of data I have at my disposal, and to define a __measure of success__.
+
+* __APPROACH__: The data is a snapshot in time and as such does not lend itself to any time-based type of analysis. In such cases, one of the __best suited approaches__ to extract insight is `clustering`, which is especially good when you have no prior domain knowledge to guide you. However, the fact that data is a __mix of categorical and numerical__ features requires a slightly different approach, which I discuss in the next section. 
+
+* __MEASURE__: The perfect candidate to __measure success__ is __Subscription Rate__ defined as __Active / Total__ Subscribers. The an focus on 1-month trial subscribers also ensures a clear cut window for analysis as their `status` reflects whether they signed up __3 MONTHS AFTERWARDS__.
+
+
+## Methodology
+
+When I started to research cluster analysis with mix categorical and numerical data, I came across an excellent post on Towards Data Science entitled  [__Clustering on mixed type data__](https://towardsdatascience.com/clustering-on-mixed-type-data-8bbd0a2569c3), from which I borrowed the core analysis coding and adjusted it to my needs. In his article, _Thomas Filaire_ shows how to use the __PAM clustering algorithm__ (Partitioning Around Medoids) to perform the clustering and the __silhouette coefficient__ to select the optimal number of clusters. 
+
+The [__K-medoid__](https://en.wikipedia.org/wiki/K-medoids), also know as __PAM__, is a clustering algorithm similar to the more popular __K-means__ algorithm. K-means and K-medoids work in similar ways in that they __create groups__ in your data and __work on distances__ (often referred to as __dissimilarities__) as they ensure that elements in each group are very similar to one another by minimising the distance within each cluster. However, K-medoids has the advantage of working on __distances other than numerical__ and lends itself well to analyse mixed-type data that include both numerical and categorical features. 
+
+I'm going to calculate the dissimilarities between observations with the help of the `daisy` function from the `cluster` library, which allows to choose between a number of methods ("euclidean", "manhattan" and "gower") to run the calculations. The __Gower's distance (1971)__ is of particular interest to us as it computes dissimilarities on a [0 1] range __regardless__ of whether the input is numerical or categorical, hence making them comparable. 
+
+
+## Clustering
+
+I'm going to segment the subscription data by the following 5 dimensions:
+
+* __Status__: Active / Cancelled
+* __Product Group__: Standard / Premium
+* __Top 3 Campaigns by Subscription Numbers__: 56472 / 56972 / 57572
+* __Payment Method__: Credit Card / Direct Debit /	PayPal
+* __Contract Monthly Price__: £6.99 / £15 
+
+
+I'll start with selecting the cut of the data I need for the clustering. I'm keeping `account_id` for my reference but will not pass it to the algorithm.
+```{r}
+clust_data <-
+   data_clean %>% 
+   # filtering by the top 3 campaigns
+   filter(campaign_code %in% c('57572', '56472', '56972')) %>%
+   # selecting 1M trial subscriptions
+   filter(trial_length == '1M') %>% 
+   # select features to cluster by
+   select(account_id, status, product_group, campaign_code, 
+          contract_monthly_price, payment_method
+          ) %>% 
+   # setting all features as factors
+   mutate(
+        account_id           = account_id %>% as_factor(),
+        status                 = status %>% as_factor(),
+        product_group          = product_group %>% as_factor(),
+        campaign_code          = campaign_code %>% as_factor(),
+        contract_monthly_price = contract_monthly_price %>% as_factor(),
+        payment_method         = payment_method %>% as_factor()
+    )
+```
+
+Then, I compute the __Gower distance__ with the `daisy` function from the `cluster` package. The “Gower's distance” would automatically be selected if some features in the data are not numeric but I prefer to spell it out anyway.
+```{r}
+gower_dist <- 
+  clust_data %>% 
+    # de-select account_id
+    select(2:6) %>%   
+    daisy(metric = "gower")
+```
+
+And that's that! You're set to go!
+
+
+### Assessing the Clusters
+
+There are a number of methods to establish the [__optimal number of clusters__](https://en.wikipedia.org/wiki/Determining_the_number_of_clusters_in_a_data_set) to use but in this study I'm using the [`silhouette coefficient`](https://en.wikipedia.org/wiki/Silhouette_(clustering)), which contrasts the average distance of elements __in the same cluster__ with average distance of elements __in other clusters__. In other words, each additional cluster is __adding "compactness"__ to the individual segment, bringing their elements closer together, whilst __"moving" each cluster further apart__ from one another. 
+
+First, I'm calculating the __Partition Around Medoids__ (a.k.a. PAM) using the `pam` function from the `cluster` library. The one number to keep an eye on is the __average silhouette width__ (or `avg.width`), which I'm storing away in the `sil_width` parameter. 
+
+```{r}
+sil_width <- c(NA)
+
+for (i in 2:8) {  
+  pam_fit <- pam(gower_dist, diss = TRUE, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+```
+
+In a business context, we want a number of clusters to be both meaningful and easy to handle, (i.e. 2 to 8) and 5-cluster configuration seems a good starting point to investigate. 
+
+```{r}
+sil_width %>% 
+  as_tibble() %>% 
+   rowid_to_column() %>% 
+   filter(rowid %in% c(2:8)) %>% 
+   ggplot(aes(rowid, value)) +
+   geom_line(colour  = 'black', size = 0.7) +
+   geom_point(colour = 'black', size = 1.3) +
+   theme_minimal() +
+   labs(title = 'Silhouette Widths of k-medoid Clusters',
+        x     = "Number of clusters",
+        y     = 'Silhouette Width') +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+When deciding on the optimal number of clusters, __DO NOT__ rely exclusively on the __output of mathematical methods__. Make sure you combine it with _domain knowledge_ and _your own judgement_ as often adding an extra segment (say, going from 5 to 6) may only add complexity for no extra insight. 
+
+
+### Visualising the Segments with t-SNE
+
+
+Now that I have a potential optimal number of clusters, I want to visualise them. To do so, I use the [__t-SNE__](https://en.wikipedia.org/wiki/T-distributed_stochastic_neighbor_embedding) ( _t-distributed stochastic neighbour embedding_), a dimensionality reduction technique that assists with cluster visualisation in a similar way to [__Principal Component Analysis__](https://en.wikipedia.org/wiki/Principal_component_analysis) and [__UMAP__](https://umap-learn.readthedocs.io/en/latest/).
+
+
+First, I pull the partitioning data for the 5-cluster configuration from  `gower_dist`
+```{r} 
+pam_fit <- 
+  gower_dist %>% 
+    # diss = TRUE to treat argument as dissimilarity matrix
+    pam(k = 5, diss = TRUE)
+```
+
+Then I construct the 2D projection of my 5-dimensional space with `Rtsne` and plot it
+```{r}
+tsne_obj <- Rtsne(gower_dist, is_distance = TRUE)
+
+
+tsne_obj$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_fit$clustering)) %>% 
+
+  # plot
+  ggplot(aes(x = X, y = Y, colour = cluster)) +
+  geom_point() +
+  theme_light() +
+  labs(title       = 't-SNE 2D Projections of k-medoid Clusters')  +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Aside from a few elements, there is a general good separation between clusters as well as closeness of elements within clusters, which confirms the segmentation relevance
+
+
+### Evaluating the Clusters
+
+At this stage of a project you get to appreciate the main difference between __Supervised__ and __Unsupervised__ approaches. With the latter is the algorithm that does all the leg work but it's still up to you to interpret the results and understand what the algorithm has found. 
+
+To properly evaluate the clusters, you want to first pull all information into one tibble that you can easily manipulate. I start by appending the __cluster number__ from the `pam_fit` list to the `clust_data`. 
+
+```{r}
+pam_results <- clust_data %>%
+   # append the cluster information onto clust_data
+  mutate(cluster = pam_fit$clustering) %>% 
+   # sort out variable order
+  select(account_id, cluster, everything()) %>% 
+   # attach some extra data features from the data_clean file
+  left_join(select(data_clean, 
+                   c(account_id, canc_reason)), by = 'account_id') %>%
+  mutate_if(is.character, funs(factor(.)))
+```
+
+__NOTE THAT__ I'm also bringing in __canc_reason__ from `data_clean`, a dimension that I did NOT use in the calculations. It does not always work but sometimes it may reveal patterns you have not explicitly considered. 
+
+From experience I found that a very good exercise is to print out (on screen or paper) summaries of each single cluster - here's an example for __cluster 2__.  Lay all the summaries before you and let your __inner Sherlock Holmes__ comes out to play! The story usually unfolds before your very eyes when you start comparing the differences between clusters.
+
+```{r, collapse=T}
+pam_results %>% 
+  filter(cluster == 2) %>%
+  select(-c(account_id , cluster, contract_monthly_price)) %>% 
+  summary()
+```
+
+When you have your story, you may want to frame it in a nice table or graph. Here I'm showing the code I used to assemble my own overall summary and then discuss the results but feel free to tailor it to your own taste and needs!
+
+First I calculate __subscription rate__ (my measure of success) and __failed payment rate__ for each cluster... 
+```{r, collapse=T}
+# subscription rate - my measure of success... 
+subscr <- 
+   pam_results %>%
+   group_by(cluster, status) %>% 
+   count() %>% 
+   ungroup() %>% 
+   # lag to allign past (lagging) obs to present obs
+   mutate(lag_1 = lag(n, n = 1)) %>% 
+   # sort out NAs
+   tidyr::fill(lag_1, .direction = "up") %>% 
+   # calculate active to total rate perc difference
+   mutate(sub_rate =  (n / (n + lag_1)))  %>% 
+   filter(status == 'Active') %>%
+   select(Cluster = cluster, Subsc.Rate = sub_rate) %>% 
+   adorn_pct_formatting(rounding = "half up", digits = 1)
+
+# ... and failed payment rate
+fail_pymt <-
+   pam_results %>%
+   group_by(cluster , canc_reason) %>% 
+   count() %>% 
+   ungroup() %>%
+   group_by(cluster) %>% 
+   mutate(tot = sum(n)) %>% 
+   # calculate failed payment rate to total 
+   mutate(fail_pymt_rate = (n / tot)) %>% 
+   ungroup() %>%
+   filter(canc_reason == 'Failed Payment') %>%
+   select(Cluster = cluster, Failed.Pymt.Rate = fail_pymt_rate) %>%
+   adorn_pct_formatting(rounding = "half up", digits = 1)
+```
+
+Then, I bring all together in a handy table so that we can have a closer look
+```{r}
+pam_results %>% 
+   group_by(Cluster   = cluster, 
+            Campaign  = campaign_code, 
+            Product   = product_group, 
+            Mth.Price = contract_monthly_price) %>% 
+   summarise(Cluster.Size = n()) %>% 
+   ungroup() %>%  
+   arrange(Campaign) %>% 
+   # attach subscription rate from subscr
+   left_join(select(subscr, c(Cluster, Subsc.Rate)), by = 'Cluster') %>% 
+   # attach failed payment rate from fail_pymt
+   left_join(select(fail_pymt, c(Cluster, Failed.Pymt.Rate)), by = 'Cluster') %>% 
+   kable(align = 'c')
+```
+
+Having focused on the top 3 campaigns was a good tactic and resulted in __clear separation of the groups__, which meant that the K-medoid discovered __sub-groups within 2 campaigns__.
+
+Let’s take a look at __campaign 57572__ first:
+
+-  __cluster 5__ has a __lower Subscription Rate__ than most campaigns (74-76%, remember?) AND __higher Failed Payment Rate__
+
+- Further inspection reveals that the lower subscription rate is associated with __Direct Debit__ and __PayPal__ payments
+
+```{r}
+pam_results %>% 
+   group_by(Cluster     = cluster, 
+            Pymt.Method = payment_method) %>% 
+   summarise(Cluster.Size = n()) %>% 
+   ungroup() %>%  
+   filter(Cluster %in% c(2,5)) %>%
+   # attach subscription rate from subscr
+   left_join(select(subscr, c(Cluster, Subsc.Rate)), by = 'Cluster') %>%
+   kable(align = 'c')
+```
+
+__RECOMMENDATION 1__: there may be potential to __incentivise Credit Card payments__ as they seem to associate with higher Subscription Rate
+
+Let’s move on to __campaign 56972__:
+
+- We already found this campaign is attributed to __acquisition of both products__, and has a __lower overall subscription rate__ of 72.5% if compared to our benchmark of 74-76%
+
+- K-medoid split this out into two groups, revealing that __premium product__ has a __lower subscription rate__ than its __standard__ counterpart
+
+```{r, echo=F}
+pam_results %>% 
+   group_by(Cluster   = cluster, 
+            Campaign  = campaign_code, 
+            Product   = product_group, 
+            Mth.Price = contract_monthly_price) %>% 
+   summarise(Cluster.Size = n()) %>% 
+   ungroup() %>%  
+   arrange(Campaign) %>% 
+   # attach subscription rate from subscr
+   left_join(select(subscr, c(Cluster, Subsc.Rate)), by = 'Cluster') %>% 
+   # attach failed payment rate from fail_pymt
+   left_join(select(fail_pymt, c(Cluster, Failed.Pymt.Rate)), by = 'Cluster') %>% 
+   kable(align = 'c')
+```
+
+__RECOMMENDATION 2__: there may be potential to investigate __different price points__ for Premium product that could help boost take up
+
+__RECOMMENDATION 3__: acquisition campaigns should be __more closely aligned to a single product__ to ensure accountability and better understanding of acquisition dynamics
+
+### Summary of recommendations
+
+* __Review and solve high failed payment rate__ - This could result in a 10% potential boost in overall subscriptions 
+
+* __Incentivise credit card payments__ - Subscriptions associated with this means of payment have a higher sign up rate that other payments methods
+
+* __Investigate different price points for premium product__ - Lower price point could boost take up
+
+* __Keep campaigns more closely aligned to product __ - This would ensure better accountability and understanding of acquisition dynamics 
+
+
+## Closing thoughts
+
+In this project I revisited clustering, , one of my favourite analytic methods, to explore and analyse a real-world dataset that included a __mix of categorical and numerical__ feature. This required a different approach from the classical __K-means__ algorithm that cannot be no directly applied to categorical data. 
+
+Instead, I used the __K-medoids__ algorithm, also known as __PAM__ (Partitioning Around Medoids), that has the advantage of working on __distances other than numerical__ and lends itself well to analyse mixed-type data. 
+
+The __silhouette coefficient__ helped to establish the __optimal number of clusters__, whilst __t-SNE__ ( t-distributed stochastic neighbour embedding), a dimensionality reduction technique akin _Principal Component Analysis_ and _UMAP_, unveiled __good separation between clusters__ as well as __closeness of elements within clusters__, confirming the segmentation relevance.
+
+Finally, I condensed the __insight__ generated from the analysis into a number of actionable and __data-driven recommendations__ that, applied correctly, could __help improve product sign up__.
+
+
+
+### Code Repository
+
+The full R code and all relevant files can be found on my GitHub profile @ [__K Medoid Clustering__](https://github.com/DiegoUsaiUK/K_Medoid_Clustering) 
+
+
+
+### References
+
+
+* For the article that inspired my foray into K-medois clustering see this excellent TDS post by _Thomas Filaire_: [__Clustering on mixed type data__](https://towardsdatascience.com/clustering-on-mixed-type-data-8bbd0a2569c3)
+
+* For a tidy and fully-featured approach to counting things, see the [__tabyls Function Vignette__](https://cran.r-project.org/web/packages/janitor/vignettes/tabyls.html)
+
+
+
+### Appendix
+
+__Table 1 – Variable Definitions__
+
+Attribute          | Description 
+:----------------|:--------------------------------------------------------
+Account ID | Unique account ID
+Created Date | Date of original account creation
+Country | Country of account holder
+Status | Current status - active/inactive
+Product Group | Product type
+Payment Frequency | Most subscriptions are a 1 year contract term - payable annually or monthly
+Campaign Code | Unique identifier for campaign attributed to acquisition
+Start Date | Start date of the trial
+End Date | Scheduled end of term
+Cancellation Date | Date of instruction to cancel
+Cancellation Reason | Reason given for cancellation
+Monthly Price | Current monthly price of subscription
+Contract Monthly Price | Price after promo period
+Trial Length | Length of trial
+Trial Monthly Price | Price during trial
+Payment Method | Payment method
+
+
