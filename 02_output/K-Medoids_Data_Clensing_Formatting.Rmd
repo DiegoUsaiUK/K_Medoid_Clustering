@@ -147,7 +147,7 @@ data_clean <-
 
 Overwhelming majority of subscriptions are UK based
 
-```{r}
+```{r, cache=T}
 data_raw %>% 
    group_by(country) %>% 
    count() %>% 
@@ -233,7 +233,7 @@ data_clean <-
 
 Top three campaigns account for over 72% of total acquisitions in February 2018
 
-```{r}
+```{r, cache=T}
 # no NAs
 data_raw %>% 
    group_by(campaign_code) %>% 
@@ -393,7 +393,8 @@ A handful of `Unknown` are to be found in `payment_method`
 data_raw %>% 
    group_by(payment_method) %>% 
    count() %>% 
-   ungroup()
+   ungroup() %>% 
+   adorn_totals()
 ```
 
 Dropping `unknown`
