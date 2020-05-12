@@ -56,7 +56,7 @@ In this post I retrace the steps I took for one of the take home analysis I was 
 
 The data represents all __online acquisitions__ in February 2018 and their subscription status 3 months later (9th June 2018) for a __Fictional News Aggregator Subscription__ business. It contains a number of parameters describing each account, like __account creation date__, __campaign attributed to acquisition__, __payment method__ and __length of product trial__. A full description of the variables can be found in the __Appendix__
 
-I got hold of this dataset in the course of a recruitment selection process as I was asked to carry out an analysis and present results and recommendations that could __helps improve their product sign up__ in my final meeting. Although fictitious in nature, I thought it best to __further anonimise the dataset__ by changing names and values of most of the variables as well as removing several features that were of no use to the analysis
+I got hold of this dataset in the course of a recruitment selection process as I was asked to carry out an analysis and present results and recommendations that could __helps improve their products sign up__ in my final meeting. Although fictitious in nature, I thought it best to __further anonimise the dataset__ by changing names and values of most of the variables as well as removing several features that were of no use to the analysis
 
 The data was raw and required some cleansing and manipulation before it could be used for analysis. You can find the anonimised dataset on [__my GitHub profile__](https://github.com/DiegoUsaiUK/K_Medoid_Clustering), along with the scripts I used to cleanse the data and perform the analysis
 
@@ -112,6 +112,8 @@ data_clean %>%
    kable(align = 'c')
 ```
 
+
+__RECOMMENDATION 1__: __Review causes of high failed payment rate__ as it could result in a 10% boost in overall subscriptions 
 
 #### Payment Methods
 
@@ -235,6 +237,8 @@ data_clean %>%
    kable(align = 'c')
 ```
 
+
+__RECOMMENDATION 2__: __Investigate different price points for standard product__ as lower price point could boost take up
 
 
 ## Analysis Structure
@@ -392,7 +396,9 @@ pam_results <- clust_data %>%
 
 __NOTE THAT__ I'm also bringing in __canc_reason__ from `data_clean`, a dimension that I did NOT use in the calculations. It does not always work but sometimes it may reveal patterns you have not explicitly considered. 
 
-From experience I found that a very good exercise is to print out (on screen or paper) summaries of each single cluster - here's an example for __cluster 2__.  Lay all the summaries before you and let your __inner Sherlock Holmes__ comes out to play! The story usually unfolds before your very eyes when you start comparing the differences between clusters.
+From experience I found that a very good exercise is to __print out the summaries__ (on screen or paper) of each single cluster - here's an example for __cluster 2__.   
+
+Lay all the summaries before you and let your __inner Sherlock Holmes__ comes out to play! The story usually unfolds before your very eyes when you start comparing the differences between clusters.
 
 ```{r, collapse=T}
 pam_results %>% 
@@ -474,7 +480,7 @@ pam_results %>%
    kable(align = 'c')
 ```
 
-__RECOMMENDATION 1__: there may be potential to __incentivise Credit Card payments__ as they seem to associate with higher Subscription Rate
+__RECOMMENDATION 3__: there may be potential to __incentivise Credit Card payments__ as they seem to associate with higher Subscription Rate
 
 Let’s move on to __campaign 56972__:
 
@@ -498,24 +504,24 @@ pam_results %>%
    kable(align = 'c')
 ```
 
-__RECOMMENDATION 2__: there may be potential to investigate __different price points__ for Premium product that could help boost take up
+__RECOMMENDATION 4__: there may be potential to investigate __different price points__ for Premium product that could help boost take up
 
-__RECOMMENDATION 3__: acquisition campaigns should be __more closely aligned to a single product__ to ensure accountability and better understanding of acquisition dynamics
+__RECOMMENDATION 5__: acquisition campaigns should be __more closely aligned to a single product__ to ensure accountability and better understanding of acquisition dynamics
 
-### Summary of recommendations
+## Summary of recommendations
 
 * __Review and solve high failed payment rate__ - This could result in a 10% potential boost in overall subscriptions 
 
 * __Incentivise credit card payments__ - Subscriptions associated with this means of payment have a higher sign up rate that other payments methods
 
-* __Investigate different price points for premium product__ - Lower price point could boost take up
+* __Investigate different price points for both standard & premium products__ - Lower price point could boost take up
 
 * __Keep campaigns more closely aligned to product __ - This would ensure better accountability and understanding of acquisition dynamics 
 
 
 ## Closing thoughts
 
-In this project I revisited clustering, , one of my favourite analytic methods, to explore and analyse a real-world dataset that included a __mix of categorical and numerical__ feature. This required a different approach from the classical __K-means__ algorithm that cannot be no directly applied to categorical data. 
+In this project I revisited clustering, one of my favourite analytic methods, to explore and analyse a real-world dataset that included a __mix of categorical and numerical__ feature. This required a different approach from the classical __K-means__ algorithm that cannot be no directly applied to categorical data. 
 
 Instead, I used the __K-medoids__ algorithm, also known as __PAM__ (Partitioning Around Medoids), that has the advantage of working on __distances other than numerical__ and lends itself well to analyse mixed-type data. 
 
